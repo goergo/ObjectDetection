@@ -11,5 +11,6 @@
 #include <tchar.h>
 
 
-
 // TODO: reference additional headers your program requires here
+
+//#import "C:/Windows/System32/powrprof.dll" rename_namespace("powerprof") rename("EOF","EndOfFile")

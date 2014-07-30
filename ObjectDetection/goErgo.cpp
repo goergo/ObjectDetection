@@ -7,13 +7,18 @@
 #include "opencv2/highgui/highgui.hpp"
 
 using namespace cv;
+using namespace std;
 
-#define FRAME_WIDTH		240
-#define FRAME_HEIGHT	180
-#define TPL_WIDTH 		16
-#define TPL_HEIGHT 		12
-#define WIN_WIDTH		TPL_WIDTH * 2
-#define WIN_HEIGHT		TPL_HEIGHT * 2
+
+#define SCALE_FACTOR 1.0
+
+#define DllExport   __declspec( dllexport ) 
+#define FRAME_WIDTH		240*SCALE_FACTOR
+#define FRAME_HEIGHT	180*SCALE_FACTOR
+#define TPL_WIDTH 		16*SCALE_FACTOR
+#define TPL_HEIGHT 		12*SCALE_FACTOR
+#define WIN_WIDTH		TPL_WIDTH * 2 
+#define WIN_HEIGHT		TPL_HEIGHT * 2 
 #define TM_THRESHOLD	0.4
 #define STAGE_INIT		1
 #define STAGE_TRACKING	2
@@ -22,29 +27,65 @@ using namespace cv;
 #define POINT_BR(r)		cvPoint(r.x + r.width, r.y + r.height)
 #define POINTS(r)		POINT_TL(r), POINT_BR(r)
 
+bool detectProximityAndEye(Mat mat_frame);
 
-void detectAndDisplay(Mat mat_frame);
+typedef struct stats
+{
+	unsigned long total_time;
+	unsigned long total_blink;
+	unsigned long total_time_alarm_ambient;
+	unsigned long total_time_alarm_proximity;
+	unsigned int total_time_alarm_position;
+}stats_t;
 
-String face_cascade_name = "C:/opencv/OpenCV/sources/data/haarcascades/haarcascade_frontalface_alt2.xml";
+typedef struct posture
+{
+	unsigned int clock_ticks;
+	FILETIME time;
+	CvRect faceRect, eyeRect;
+	bool alarm_ambient_light;
+	bool alarm_proximity;
+	bool alaram_sitting_posture;
+	int eye_blinks;
+
+} posture_t;
+
+posture_t curr_posture;
+posture_t buf_posture;
+int buf_num = 0;
+std::vector<posture_t> posture_vec;
+std::list<posture_t> posture_with_blink_list;
+
+String face_cascade_name = "C:/opencv/OpenCV/sources/data/haarcascades/haarcascade_frontalface_alt_tree.xml";
+//String face_cascade_name = "C:/opencv/OpenCV/sources/data/haarcascades/haarcascade_profileface.xml";
 String eyes_cascade_name = "C:/opencv/OpenCV/sources/data/haarcascades/haarcascade_eye_tree_eyeglasses.xml";
+//String eyes_cascade_name = "C:/opencv/OpenCV/sources/data/haarcascades/haarcascade_mcs_eyepair_small.xml";
+//String eyes_cascade_name = "C:/opencv/OpenCV/sources/data/haarcascades/haarcascade_mcs_lefteye.xml";
 
+[event_source(native)]
+class Csource {
+public:
+	__event void BlinkEvent(int nvalue);
+};
 VideoCapture capture;
-unsigned int stime, etime;
+unsigned int stime, ticks;
+unsigned long total_ticks;
 cv::CascadeClassifier face_cascade;
 cv::CascadeClassifier eyes_cascade;
 int rSig, ypos;
 int trigDist = 0;
 int trigHeight = 0;
-bool alm, pause;
+bool proximity_alm, ambient_light_alm, pause;
 int		text_delay, stage = STAGE_INIT;
 CvSeq*	comp = 0;
-CvRect	window, eye;
+CvRect	window, eye, eye2;
 int key, found;
-ULONG64 blink_count;
-FILETIME st, et;
-
-using namespace cv;
-using namespace std;
+ULONG64 total_blink_count;
+unsigned int blink_count;
+FILETIME st, currt;
+int avg_luminance = 0;
+int threshold_luminance = 0;
+FILE* pFile;
 
 Mat mat_frame;
 IplImage*		frame, *gray, *diff, *tpl;
@@ -60,18 +101,127 @@ int	 is_eye_pair(CvSeq* comp, int num, CvRect* eye);
 int  locate_eye(IplImage* img, IplImage* tpl, CvRect* window, CvRect* eye);
 int	 is_blink(CvSeq* comp, int num, CvRect window, CvRect eye);
 void delay_frames(int nframes);
-int init();
 void exit_nicely(char* msg);
 
-void
-delay_frames(int nframes)
+ extern "C"  __declspec( dllexport )int statsdumps()
+{
+	char buf[1024];
+	unsigned long total_time = 0;
+	unsigned long total_blink = 0;
+	unsigned long total_time_alarm_ambient = 0;
+	unsigned long total_time_alarm_proximity = 0;
+	unsigned int total_time_alarm_position = 0;
+	for (int i = 1; i < posture_vec.size(); ++i) //ignore the first frame
+	{
+		total_time += posture_vec[i].clock_ticks;
+		//total_blink += posture_vec[i].eye_blinks;
+		if (posture_vec[i].alarm_proximity)
+			total_time_alarm_proximity += posture_vec[i].clock_ticks;
+		if (posture_vec[i].alarm_ambient_light)
+			total_time_alarm_ambient += posture_vec[i].clock_ticks;
+	}
+	stats_t stats;
+	stats.total_blink = total_blink_count;
+	stats.total_time_alarm_ambient = total_time_alarm_ambient;
+	stats.total_time = total_time;
+	stats.total_time_alarm_position = total_time_alarm_position;
+	stats.total_time_alarm_proximity = total_time_alarm_proximity;
+
+	float perc_prox = (float)total_time_alarm_proximity * 100.0 / (float)total_time;
+	float perc_ambi = (float)total_time_alarm_ambient * 100.0 / (float)total_time;
+
+	sprintf(buf, "total time:%d\ntotal blinks:%d\n %%age time wrong proximity:%f\n %%age time wrong ambient light:%f\n",
+		total_time/1000,total_blink_count, perc_prox, perc_ambi );
+	fputs(buf, pFile);
+	/*
+	std::string stats_str;
+	stats_str = "total blinks:" + total_blink + '\n';
+	stats_str = "total time wrong proximity" + total_time_alarm_proximity + '\n';
+	stats_str = "total time wrong ambient light" + total_time_alarm_ambient + '\n';
+	fwrite(&stats, sizeof(stats_t), 1, pFile);
+	*/
+	return 1;
+}
+
+ extern "C"  __declspec(dllexport)int get_stats(int *blink, int *ambient_alarm, int *posture_alarm, int use_buf = 1 )
+ {
+	 if (!posture_with_blink_list.empty())
+	 {
+		 posture_t last_posture =posture_with_blink_list.front();
+		 posture_with_blink_list.pop_front();
+		 *blink = last_posture.eye_blinks;
+		 *ambient_alarm = last_posture.alarm_ambient_light;
+		 *posture_alarm = last_posture.alarm_proximity;
+		 buf_num = 0;
+		 return 1;
+	 }
+	 if (use_buf) {
+		 if (buf_num > 0) 
+		 {
+			 *blink = buf_posture.eye_blinks;
+			 *ambient_alarm = buf_posture.alarm_ambient_light;
+			 *posture_alarm = buf_posture.alarm_proximity;
+			 buf_num = 0;
+			 return 1;
+		 }
+	 }
+	 *blink = curr_posture.eye_blinks;
+	 *ambient_alarm = curr_posture.alarm_ambient_light;
+	 *posture_alarm = curr_posture.alarm_proximity;
+	 buf_num = 0;
+	 return 1;
+
+ }
+void draw_text(Mat &f, const char *t, int &d, bool use_bg)
+{
+	int fontFace = FONT_HERSHEY_SCRIPT_SIMPLEX;
+	int baseline = 0;
+	double fontscale = 0.4;
+	int thickness = 0.4;
+	if (d)
+	{
+		cv::Size _size = cv::getTextSize(t, fontFace, fontscale, thickness, &baseline);
+		if (use_bg)
+		{
+			cv::rectangle(f, cvPoint(0, f.cols),
+				cvPoint(_size.width + 5,
+				f.rows - _size.height * 2),
+				CV_RGB(255, 0, 0), CV_FILLED, 8, 0);
+		}
+		cv::putText(f, t, cvPoint(2, f.rows - _size.height / 2), fontFace, fontscale, CV_RGB(255, 255, 0), thickness, 8);
+		d--;
+	}
+}
+
+
+
+void draw_text(IplImage *f, const char *t, int &d, bool use_bg)
+{
+	if (d)
+	{
+		CvSize _size;
+		cvGetTextSize(t, &font, &_size, NULL);
+		if (use_bg)
+		{
+			cvRectangle(f, cvPoint(0, f->height),
+				cvPoint(_size.width + 5,
+				f->height - _size.height * 2),
+				CV_RGB(255, 0, 0), CV_FILLED, 8, 0);
+		}
+		cvPutText(f, t, cvPoint(2, f->height - _size.height / 2), &font, CV_RGB(255, 255, 0));
+		d--;
+	}
+}
+
+void delay_frames(int nframes)
 {
 	int i;
 
 	for (i = 0; i < nframes; i++)
 	{
 		capture.read(mat_frame);
-		if (frame) delete frame;
+		if (frame)
+			delete frame;
 		frame = new IplImage(mat_frame);
 		if (!frame)
 			exit_nicely("cannot query frame");
@@ -97,20 +247,20 @@ is_eye_pair(CvSeq* comp, int num, CvRect* eye)
 	CvRect r2 = cvBoundingRect(comp, 1);
 
 	/* the width of the components are about the same */
-	if (abs(r1.width - r2.width) >= 5)
+	if (abs(r1.width - r2.width) >= 5*SCALE_FACTOR)
 		return 0;
 
 	/* the height f the components are about the same */
-	if (abs(r1.height - r2.height) >= 5)
+	if (abs(r1.height - r2.height) >= 5*SCALE_FACTOR)
 		return 0;
 
 	/* vertical distance is small */
-	if (abs(r1.y - r2.y) >= 5)
+	if (abs(r1.y - r2.y) >= 5*SCALE_FACTOR)
 		return 0;
 
 	/* reasonable horizontal distance, based on the components' width */
 	int dist_ratio = abs(r1.x - r2.x) / r1.width;
-	if (dist_ratio < 2 || dist_ratio > 5)
+	if (dist_ratio < 2/SCALE_FACTOR || dist_ratio > 5*SCALE_FACTOR)
 		return 0;
 
 	/* get the centroid of the 1st component */
@@ -249,10 +399,10 @@ is_blink(CvSeq* comp, int num, CvRect window, CvRect eye)
 /**
 * Initialize images, memory, and windows
 */
-int
-init()
+extern "C"  __declspec( dllexport ) int init()
 {
-	//GetSystemTimeAsFileTime(&st);
+	pFile = fopen("stats.txt", "a+");
+	GetSystemTimeAsFileTime(&st);
 	stime = GetTickCount();
 	face_cascade = cv::CascadeClassifier::CascadeClassifier(face_cascade_name);
 	eyes_cascade = cv::CascadeClassifier::CascadeClassifier(eyes_cascade_name);
@@ -281,20 +431,14 @@ init()
 	capture.set(CV_CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT);
 
 	capture.read(mat_frame);
-	if (frame) delete frame;
+	if (frame)
+		delete frame;
 	frame = new IplImage(mat_frame);
 	if (!frame)
 		exit_nicely("cannot query frame!");
 
 	cvInitFont(&font, CV_FONT_HERSHEY_SIMPLEX, 0.4, 0.4, 0, 1, 8);
 	cvNamedWindow(wnd_name, 1);
-
-	capture.read(mat_frame);
-	if (frame) delete frame;
-	frame = new IplImage(mat_frame);
-	if (!frame)
-		exit_nicely("cannot query frame!");
-	//DRAW_TEXT(frame, msg[i], delay, 0);
 	cvShowImage(wnd_name, frame);
 	cvWaitKey(30);
 
@@ -356,7 +500,7 @@ void draw_rects(IplImage *f, IplImage *d, CvRect rw, CvRect ro)
 {
 
 	do {
-		if (alm)
+		if (proximity_alm)
 			cvRectangle(f, cvPoint(rw.x, rw.y), cvPoint(rw.x + rw.width, rw.y + rw.height), CV_RGB(255, 0, 0), 2, 8, 0);
 		else
 			cvRectangle(f, cvPoint(rw.x, rw.y), cvPoint(rw.x + rw.width, rw.y + rw.height), CV_RGB(0, 255, 0), 1, 8, 0);
@@ -365,11 +509,12 @@ void draw_rects(IplImage *f, IplImage *d, CvRect rw, CvRect ro)
 		cvRectangle(d, cvPoint(ro.x,ro.y), cvPoint(ro.x + ro.width, ro.y + ro.height), cvScalarAll(255), 1, 8, 0);
 	} while (0);
 }
+
 void getDistance(Mat mat_frame, int interval) 
 { //OpenCV functions
 
 	//pushmatrix and popmatrix prevents the buttons from beeing scaled with the video
-	//if (alm) stroke(255, 0, 0); //draw all lines red if alarm is active
+	//if (proximity_alm) stroke(255, 0, 0); //draw all lines red if alarm is active
 	//else stroke(0, 255, 0);
 	//strokeWeight(2);
 	//Rectangle[] faces = opencv.detect();
@@ -393,45 +538,39 @@ void getDistance(Mat mat_frame, int interval)
 		//the following line draws a second box with the limit distance
 		if (trigDist != 0)
 		{
+			curr_posture.faceRect = faces[0];
 			cv::Rect  deltaRect = cv::Rect(faces[i].x - delta / 2, faces[i].y - delta / 2, faces[i].width + delta, trigDist);
-			/*
-			if (alm)
+			if (proximity_alm) {
+				curr_posture.alarm_proximity = true;
+				buf_num = 10;
 				cv::rectangle(mat_frame, deltaRect, CV_RGB(255, 0, 0), 2, 8,0);
-			else
+			}
+			else {
+				curr_posture.alarm_proximity = false;
 				cv::rectangle(mat_frame, deltaRect, CV_RGB(0, 255, 0), 2, 8, 0);
-				*/
+			}
 		}
 			//rect(faces[i].x - delta / 2, faces[i].y - delta / 2, faces[i].width + delta, trigDist);
 	}
-	//This draws a line at the limit height:
 	//if (trigHeight != 0) line(0, trigHeight, width, trigHeight);
-	//popMatrix();
 }
 
-void getProximity(Mat mat_frame)
+int getProximity(Mat mat_frame)
 {
 	getDistance(mat_frame,0);  // run the OpenCV routine
 	if (trigHeight != 0 && trigDist != 0 && !pause) { //check if limits have been initialized
 		//and if pause is off
 		if (rSig > trigDist || ypos > trigHeight) { //compare values to limits
-			alm = true;
+			proximity_alm = true;
 		}
 		else {
-			alm = false;
+			proximity_alm = false;
 		}
 	}
-
-	/*
-	if (alm == false) almTimer = millis() + 2000;  //reset alarm timer if alarm is off
-	else if (millis() > almTimer) { //check if alarm timer has expired
-		if (millis() - 2000 < almTimer) { //do this for additional 2 seconds
-			Toolkit.getDefaultToolkit().beep(); //call the windows alarm sound
-			delay(150);
-		}
-	}*/
+		return (int)proximity_alm;
 }
 
-int configureDefaults(Mat *mat_frame)
+int configureDefaults(Mat &mat_frame)
 {
 	trigDist = rSig + 3;
 	trigHeight = ypos + 3;
@@ -473,8 +612,9 @@ get_connected_components(IplImage* img, IplImage* prev_img, CvRect window, CvSeq
 	return nc;
 }
 
-int detectBlink(IplImage *frame)
+int detectBlink(Mat &mat_frame, IplImage *frame, bool eye_hint)
 {
+	Csource source;
 	if (!frame)
 		exit_nicely("cannot query frame!");
 	frame->origin = 0;
@@ -486,16 +626,40 @@ int detectBlink(IplImage *frame)
 
 	int nc = get_connected_components(gray, previous, window, &comp);
 
-		if (stage == STAGE_INIT && is_eye_pair(comp, nc, &eye))
+		if (stage == STAGE_INIT)
 		{
-			delay_frames(5);
+			if (is_eye_pair(comp, nc, &eye))
+			{
+				delay_frames(5);
 
-			cvSetImageROI(gray, eye);
-			cvCopy(gray, tpl, NULL);
-			cvResetImageROI(gray);
+				//cvReleaseImage(&tpl);
+				//tpl = cvCreateImage(cvSize(eye.width, eye.height), 8, 1);
+				cvSetImageROI(gray, eye);
+				cvCopy(gray, tpl, NULL);
+				cvResetImageROI(gray);
 
-			stage = STAGE_TRACKING;
-			text_delay = 10;
+				curr_posture.eyeRect = eye;
+				stage = STAGE_TRACKING;
+				text_delay = 0;
+			}
+			else if (eye_hint) {
+				//try deducing eye using eye hint from classifier output
+				eye = eye2;
+
+				delay_frames(5);
+
+				//cvReleaseImage(&tpl);
+				//tpl = cvCreateImage(cvSize(eye.width, eye.height), 8, 1);
+				cvSetImageROI(gray, eye);
+				cvCopy(gray, tpl, NULL);
+				cvResetImageROI(gray);
+
+				//nc = get_connected_components(gray, previous, eye, &comp);
+
+				curr_posture.eyeRect = eye;
+				stage = STAGE_TRACKING;
+				text_delay = 0;
+			}
 		}
 
 		if (stage == STAGE_TRACKING)
@@ -506,93 +670,193 @@ int detectBlink(IplImage *frame)
 				stage = STAGE_INIT;
 
 			if (is_blink(comp, nc, window, eye)) {
+				__raise source.BlinkEvent(1);
 				++blink_count;
-				text_delay = 1;
+				++total_blink_count;
+				buf_num = 20;
+				text_delay = 10;
 			}
 
-			draw_rects(frame, diff, window, eye);
-			//DRAW_TEXT(frame, "blink!", text_delay, 1);
+			curr_posture.eye_blinks = blink_count;
+			curr_posture.eyeRect = eye;
+
+			//draw_rects(frame, diff, window, eye);
+			draw_text(mat_frame, "blink!", text_delay, 1);
 		}
 
-		cvShowImage(wnd_name, frame);
+		imshow(wnd_name, mat_frame);
 		cvShowImage(wnd_debug, diff);
+		if (previous) 
+			cvReleaseImage(&previous);
 		previous = (IplImage*)cvClone(gray);
 		//key = cvWaitKey(15);
 
 		return 1;
 
 }
-int main(void)
+int detectAmbientLight(Mat &mat_frame, IplImage *frame, bool configure = false)
 {
-	Mat frame;
-	init();
-	while (capture.read(frame))
+	Mat frame_yuv;
+    cvtColor( mat_frame, frame_yuv, CV_BGR2YUV );
+
+    unsigned char* pixelPtr = (unsigned char*)frame_yuv.data;
+    int cn = frame_yuv.channels();
+	long int total_luminance = 0;
+	int total_sample = 0;
+    for(int i = 0; i < frame_yuv.rows; i+=10)
+    {
+        for(int j = 0; j < frame_yuv.cols; j += 10)
+        {
+            Scalar_<unsigned char> yuvPixel;
+            yuvPixel.val[0] = pixelPtr[i*frame_yuv.cols*cn + j*cn + 0]; // Y
+            yuvPixel.val[1] = pixelPtr[i*frame_yuv.cols*cn + j*cn + 1]; // U
+            yuvPixel.val[2] = pixelPtr[i*frame_yuv.cols*cn + j*cn + 2]; // V
+
+			total_luminance += yuvPixel.val[0];
+			++total_sample;
+        }
+    }
+
+	avg_luminance = total_luminance / (total_sample);
+	if (configure) {
+		threshold_luminance = avg_luminance;
+		/*
+		GUID *pPwrGUID = NULL;
+		GUID subGUID = GUID_VIDEO_SUBGROUP;
+		GUID BriGUID = GUID_DEVICE_POWER_POLICY_VIDEO_BRIGHTNESS;
+
+		DWORD brigthness_out = PowerReadACValue(NULL, pPwrGUID, &subGUID, &BriGUID, NULL, NULL, NULL);
+		*/
+	}
+
+	if ((threshold_luminance *0.8) > avg_luminance)
 	{
-		if (frame.empty())
+		ambient_light_alm = true;
+		buf_num = 10;
+		//draw_text(frame, "*low light*", text_delay, 10);
+	}
+	else {
+		ambient_light_alm = false;
+	}
+	curr_posture.alarm_ambient_light = ambient_light_alm;
+
+	return 1;
+}
+
+
+
+ extern "C"  __declspec( dllexport ) int webCamMain(void)
+{
+	Mat mat_frame;
+	init();
+	while (capture.read(mat_frame))
+	{
+		GetSystemTimeAsFileTime(&currt);
+		ticks = GetTickCount() - stime;
+		memset((void*)&curr_posture, 0, sizeof(posture_t));
+		curr_posture.clock_ticks = ticks;
+		curr_posture.time = currt;
+		if (mat_frame.empty())
 		{
 			//printf(" --(!) No captured frame -- Break!");
 			break;
 		}
+		if (frame)
+			delete frame;
+		frame = new IplImage(mat_frame);
 
-		IplImage *iplImgFrame = new IplImage(frame);
-		detectAndDisplay(frame);
-		detectBlink(iplImgFrame);
+		bool eye_hint = detectProximityAndEye(mat_frame);
+
+		detectBlink(mat_frame, frame, false);
+		detectAmbientLight(mat_frame,frame);
+
+		posture_vec.push_back(curr_posture);
 
 		int c = cvWaitKey(15);
 		// escape
 		int ll_millisec = 0;
 		if ((char)c == 27) { 
-			//GetSystemTimeAsFileTime(&et);
+			//GetSystemTimeAsFileTime(&currt);
 			//int ll_millisec = ((LONGLONG)et.dwLowDateTime + ((LONGLONG)(et.dwHighDateTime) << 32LL) - (LONGLONG)st.dwLowDateTime + ((LONGLONG)(st.dwHighDateTime) << 32LL))/10000;
-			etime = GetTickCount();
-			ll_millisec = etime - stime;
-			printf("%ld blinks in %ld milliseconds at rate of %f blinks per minute", blink_count, ll_millisec, (blink_count*60.0*1000.0)/(ll_millisec));
+			//ticks = GetTickCount();
+			//ll_millisec = ticks - stime;
+			//printf("%ld blinks in %ld milliseconds at rate of %f blinks per minute", blink_count, ll_millisec, (blink_count*60.0*1000.0)/(ll_millisec));
+			statsdumps();
+			fclose(pFile);
 			break;
-		cvWaitKey(-1);
 		} else if ((char)c == 'c') { 
-			configureDefaults(&frame);
+			configureDefaults(mat_frame);
+			detectAmbientLight(mat_frame, frame, true);
 		}
+		if (blink_count > 0) {
+			posture_with_blink_list.push_back(curr_posture);
+			blink_count = 0;
+		}
+		if (buf_num == 10)
+			buf_posture = curr_posture;
+		if (buf_num > 0)
+			--buf_num;
 	}
 	return 0;
 }
 
-void detectAndDisplay(Mat mat_frame)
+bool detectProximityAndEye(Mat mat_frame)
 {
 	std::vector<Rect> faces;
 	Mat frame_gray;
+	bool eye_detected = false;
 
 	cvtColor(mat_frame, frame_gray, COLOR_BGR2GRAY);
 	equalizeHist(frame_gray, frame_gray);
 
 	//-- Detect faces
 	face_cascade.detectMultiScale(frame_gray, faces, 1.1, 3, 0, Size(30, 30));
-	getProximity(mat_frame); 
+	int is_near = getProximity(mat_frame); 
 
 
-	/*
 	for (size_t i = 0; i < faces.size(); i++)
 	{
 		Point center(faces[i].x + faces[i].width / 2, faces[i].y + faces[i].height / 2);
-		ellipse(mat_frame, center, Size(faces[i].width / 2, faces[i].height / 2), 0, 0, 360, Scalar(255, 0, 255), 4, 8, 0);
+		//ellipse(mat_frame, center, Size(faces[i].width / 2, faces[i].height / 2), 0, 0, 360, Scalar(255, 0, 255), 4, 8, 0);
 
 		Mat faceROI = frame_gray(faces[i]);
 		std::vector<Rect> eyes;
 
 		//-- In each face, detect eyes
-		eyes_cascade.detectMultiScale(faceROI, eyes, 1.05, 3, 0 | CASCADE_SCALE_IMAGE, Size(30, 30));
+		if (is_near) 
+		{
+
+			eyes_cascade.detectMultiScale(faceROI, eyes, 1.1, 2, 0 | CASCADE_SCALE_IMAGE, Size(6, 6));
+		}
+		else
+		{
+			eyes_cascade.detectMultiScale(faceROI, eyes, 1.03, 2, 0 | CASCADE_SCALE_IMAGE, Size(1, 1));
+		}
 
 		for (size_t j = 0; j < eyes.size(); j++)
 		{
 			Point eye_center(faces[i].x + eyes[j].x + eyes[j].width / 2, faces[i].y + eyes[j].y + eyes[j].height / 2);
 			int radius = cvRound((eyes[j].width + eyes[j].height)*0.25);
-			circle(mat_frame, eye_center, radius, Scalar(255, 0, 0), 4, 8, 0);
+			eye_detected = true;
+			eye2 = cvRect(
+				eye_center.x - (TPL_WIDTH/2),
+				eye_center.y - (TPL_WIDTH/2),
+				TPL_WIDTH,
+				TPL_HEIGHT
+				//2*radius,
+				//2*radius
+			);
+			//circle(mat_frame, eye_center, radius, Scalar(255, 0, 0), 1, 8, 0);
 		}
+		break;
 	}
+	/*
 	*/
 	//-- Show what you got
 	//imshow(window_name, mat_frame);
-	if (frame) delete frame;
+	if (frame)
+		delete frame;
 	frame = new IplImage(mat_frame);
 	cvShowImage(wnd_name, frame);
+	return eye_detected;
 }
-

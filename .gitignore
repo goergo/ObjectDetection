@@ -7,12 +7,16 @@ Desktop.ini
 
 # Recycle Bin used on file shares
 $RECYCLE.BIN/
+Debug/
+obj/
 
 # Windows Installer files
 *.cab
 *.msi
 *.msm
 *.msp
+*.exe
+*.dll
 
 # =========================
 # Operating System Files

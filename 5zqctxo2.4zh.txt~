@@ -1,0 +1,60 @@
+﻿
+# Please enter the commit message for your changes. Lines starting
+# with '#' will be ignored, and an empty message aborts the commit.
+# Explicit paths specified without -i nor -o; assuming --only paths...
+# On branch master
+# Changes to be committed:
+#   (use "git reset HEAD <file>..." to unstage)
+#
+#	new file:   ObjectDetection.sdf
+#	new file:   ObjectDetection/Blink.cpp
+#	new file:   ObjectDetection/ObjectDetection.vcxproj
+#	new file:   ObjectDetection/ObjectDetection.vcxproj.filters
+#	new file:   ObjectDetection/ReadMe.txt
+#	new file:   ObjectDetection/common.h
+#	new file:   ObjectDetection/goErgo.cpp
+#	new file:   ObjectDetection/stdafx.cpp
+#	new file:   ObjectDetection/stdafx.h
+#	new file:   ObjectDetection/targetver.h
+#	new file:   ObjectDetection/x64/Debug/ObjectDetection.Build.CppClean.log
+#	new file:   ObjectDetection/x64/Debug/ObjectDetection.log
+#	new file:   ObjectDetection/x64/Debug/goErgo.Build.CppClean.log
+#	new file:   goErgo
+#	new file:   goErgo.sdf
+#	new file:   goErgo.sln
+#	new file:   goErgo.suo
+#	new file:   goErgo.v12.suo
+#	new file:   ipch/objectdetection-cc3cef2/goergo-7f42366d.ipch
+#	new file:   ipch/objectdetection-cc3cef2/objectdetection-3108cee0.ipch
+#	new file:   ipch/objectdetection-cc3cef2/objectdetection-61f972e2.ipch
+#	new file:   x64/Debug/haarcascade_eye.xml
+#	new file:   x64/Debug/haarcascade_eye_tree_eyeglasses.xml
+#	new file:   x64/Debug/haarcascade_frontalface_alt.xml
+#	new file:   x64/Debug/haarcascade_frontalface_alt2.xml
+#	new file:   x64/Debug/haarcascade_frontalface_alt_tree.xml
+#	new file:   x64/Debug/haarcascade_frontalface_default.xml
+#	new file:   x64/Debug/haarcascade_fullbody.xml
+#	new file:   x64/Debug/haarcascade_lefteye_2splits.xml
+#	new file:   x64/Debug/haarcascade_lowerbody.xml
+#	new file:   x64/Debug/haarcascade_mcs_eyepair_big.xml
+#	new file:   x64/Debug/haarcascade_mcs_eyepair_small.xml
+#	new file:   x64/Debug/haarcascade_mcs_leftear.xml
+#	new file:   x64/Debug/haarcascade_mcs_lefteye.xml
+#	new file:   x64/Debug/haarcascade_mcs_mouth.xml
+#	new file:   x64/Debug/haarcascade_mcs_nose.xml
+#	new file:   x64/Debug/haarcascade_mcs_rightear.xml
+#	new file:   x64/Debug/haarcascade_mcs_righteye.xml
+#	new file:   x64/Debug/haarcascade_mcs_upperbody.xml
+#	new file:   x64/Debug/haarcascade_profileface.xml
+#	new file:   x64/Debug/haarcascade_righteye_2splits.xml
+#	new file:   x64/Debug/haarcascade_smile.xml
+#	new file:   x64/Debug/haarcascade_upperbody.xml
+#
+# Changes not staged for commit:
+#   (use "git add <file>..." to update what will be committed)
+#   (use "git checkout -- <file>..." to discard changes in working directory)
+#   (commit or discard the untracked or modified content in submodules)
+#
+#	modified:   goErgo (untracked content)
+#
+
